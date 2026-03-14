@@ -29,6 +29,25 @@ export class WorkflowLogs implements INodeType {
     ],
     properties: [
       {
+        displayName: 'Mode',
+        name: 'mode',
+        type: 'options',
+        options: [
+          {
+            name: 'Auto-Detect (Error Trigger)',
+            value: 'autoDetect',
+            description: 'Automatically extract error details from Error Trigger output',
+          },
+          {
+            name: 'Manual',
+            value: 'manual',
+            description: 'Manually configure all fields',
+          },
+        ],
+        default: 'autoDetect',
+        description: 'Auto-Detect mode parses the Error Trigger output automatically',
+      },
+      {
         displayName: 'Log Type',
         name: 'logType',
         type: 'options',
@@ -54,6 +73,11 @@ export class WorkflowLogs implements INodeType {
         type: 'string',
         default: '',
         required: true,
+        displayOptions: {
+          show: {
+            mode: ['manual'],
+          },
+        },
         description: 'The log message. Supports expressions, e.g. {{$json.error.message}}.',
         typeOptions: {
           rows: 3,
@@ -71,7 +95,28 @@ export class WorkflowLogs implements INodeType {
             name: 'errorCode',
             type: 'string',
             default: '',
-            description: 'An error code to categorize errors (e.g. TIMEOUT, AUTH_FAILED, RATE_LIMIT)',
+            description: 'Override the auto-detected error code (e.g. TIMEOUT, AUTH_FAILED)',
+          },
+          {
+            displayName: 'Severity',
+            name: 'severity',
+            type: 'options',
+            options: [
+              { name: 'Critical', value: 'CRITICAL' },
+              { name: 'High', value: 'HIGH' },
+              { name: 'Medium', value: 'MEDIUM' },
+              { name: 'Low', value: 'LOW' },
+              { name: 'Info', value: 'INFO' },
+            ],
+            default: '',
+            description: 'Override the auto-detected severity level. Leave empty for auto-detection.',
+          },
+          {
+            displayName: 'Execution URL',
+            name: 'executionUrl',
+            type: 'string',
+            default: '',
+            description: 'URL to the n8n execution for quick access',
           },
           {
             displayName: 'Workflow ID',
@@ -147,26 +192,50 @@ export class WorkflowLogs implements INodeType {
 
     for (let i = 0; i < items.length; i++) {
       try {
+        const mode = this.getNodeParameter('mode', i) as string;
         const logType = this.getNodeParameter('logType', i) as string;
-        const message = this.getNodeParameter('message', i) as string;
         const additionalFields = this.getNodeParameter('additionalFields', i) as IDataObject;
 
         const body: IDataObject = {
           type: logType,
-          message,
         };
 
-        if (additionalFields.errorCode) body.errorCode = additionalFields.errorCode;
-        if (additionalFields.workflowId) body.workflowId = additionalFields.workflowId;
-        if (additionalFields.workflowName) body.workflowName = additionalFields.workflowName;
-        if (additionalFields.executionId) body.executionId = additionalFields.executionId;
-        if (additionalFields.nodeName) body.nodeName = additionalFields.nodeName;
-        if (additionalFields.nodeType) body.nodeType = additionalFields.nodeType;
-        if (additionalFields.stackTrace) body.stackTrace = additionalFields.stackTrace;
+        if (mode === 'autoDetect') {
+          // Auto-extract from Error Trigger or any input data
+          const json = items[i].json as IDataObject;
+          body.message = extractMessage(json, logType);
+          body.stackTrace = extractStackTrace(json);
+          body.nodeName = extractField(json, ['execution.lastNodeExecuted', 'lastNodeExecuted']) as string || undefined;
+          body.executionUrl = extractField(json, ['execution.url', 'executionUrl']) as string || undefined;
 
-        if (additionalFields.includeInputData) {
-          body.payload = items[i].json;
+          // Auto-fill workflow info from expressions
+          body.workflowId = additionalFields.workflowId || extractField(json, ['workflow.id', 'workflowId']) as string || undefined;
+          body.workflowName = additionalFields.workflowName || extractField(json, ['workflow.name', 'workflowName']) as string || undefined;
+          body.executionId = additionalFields.executionId || extractField(json, ['execution.id', 'executionId']) as string || undefined;
+
+          // Always include the full input data in auto-detect mode
+          body.payload = json;
+        } else {
+          // Manual mode
+          const message = this.getNodeParameter('message', i) as string;
+          body.message = message;
+
+          if (additionalFields.workflowId) body.workflowId = additionalFields.workflowId;
+          if (additionalFields.workflowName) body.workflowName = additionalFields.workflowName;
+          if (additionalFields.executionId) body.executionId = additionalFields.executionId;
+          if (additionalFields.stackTrace) body.stackTrace = additionalFields.stackTrace;
+          if (additionalFields.nodeName) body.nodeName = additionalFields.nodeName;
+          if (additionalFields.nodeType) body.nodeType = additionalFields.nodeType;
+
+          if (additionalFields.includeInputData) {
+            body.payload = items[i].json;
+          }
         }
+
+        // Overrides (apply in both modes)
+        if (additionalFields.errorCode) body.errorCode = additionalFields.errorCode;
+        if (additionalFields.severity) body.severity = additionalFields.severity;
+        if (additionalFields.executionUrl) body.executionUrl = additionalFields.executionUrl;
 
         if (additionalFields.metadata) {
           try {
@@ -215,4 +284,83 @@ export class WorkflowLogs implements INodeType {
 
     return [returnData];
   }
+}
+
+// ========================================
+// Helper functions for auto-detection
+// ========================================
+
+/**
+ * Extract a value from nested JSON using dot-notation paths
+ */
+function extractField(json: IDataObject, paths: string[]): unknown {
+  for (const path of paths) {
+    const parts = path.split('.');
+    let current: unknown = json;
+    let found = true;
+    for (const part of parts) {
+      if (current && typeof current === 'object' && part in (current as Record<string, unknown>)) {
+        current = (current as Record<string, unknown>)[part];
+      } else {
+        found = false;
+        break;
+      }
+    }
+    if (found && current !== undefined && current !== null && current !== '') {
+      return current;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract error message from various n8n data structures
+ */
+function extractMessage(json: IDataObject, logType: string): string {
+  if (logType === 'SUCCESS') {
+    return 'Workflow executed successfully';
+  }
+
+  // Try common error paths from Error Trigger
+  const paths = [
+    'execution.error.message',
+    'error.message',
+    'message',
+    'execution.error',
+    'error',
+  ];
+
+  for (const path of paths) {
+    const value = extractField(json, [path]);
+    if (value && typeof value === 'string') {
+      return value;
+    }
+    if (value && typeof value === 'object') {
+      return JSON.stringify(value);
+    }
+  }
+
+  return 'Unknown error';
+}
+
+/**
+ * Extract stack trace from various n8n data structures
+ */
+function extractStackTrace(json: IDataObject): string | undefined {
+  const paths = [
+    'execution.error.stack',
+    'error.stack',
+    'stack',
+    'execution.error.stackTrace',
+    'stackTrace',
+  ];
+
+  for (const path of paths) {
+    const value = extractField(json, [path]);
+    if (value && typeof value === 'string') {
+      return value;
+    }
+  }
+
+  return undefined;
 }
