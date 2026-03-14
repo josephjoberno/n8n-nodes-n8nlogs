@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-workflowlogs",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "n8n community node for sending workflow logs (success/error) to WorkflowLogs monitoring platform",
   "keywords": [
     "n8n-community-node-package",
