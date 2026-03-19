@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.0](https://github.com/josephjoberno/n8n-nodes-workflowlogs/compare/v0.4.0...v0.5.0) (2026-03-19)
+
+### Features
+
+* **WorkflowLogs:** add base URL validation and metadata protection ([4b1d61d](https://github.com/josephjoberno/n8n-nodes-workflowlogs/commit/4b1d61d76c3226255ea68a21cd8e220d001ddabb))
+
 ## [0.4.0](https://github.com/josephjoberno/n8n-nodes-workflowlogs/compare/v0.3.1...v0.4.0) (2026-03-14)
 
 ### Features
